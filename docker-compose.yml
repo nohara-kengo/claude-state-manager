@@ -1,7 +1,7 @@
 services:
   task-runner:
     build: .
-    restart: unless-stopped
+    # restart しない（バッチ実行: タスク完了後に自動終了）
     environment:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - GH_TOKEN=${GITHUB_TOKEN}

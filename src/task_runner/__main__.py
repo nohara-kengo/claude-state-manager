@@ -5,7 +5,7 @@ import asyncio
 import sys
 
 from task_runner.config import load_config
-from task_runner.daemon import Daemon
+from task_runner.daemon import Runner
 from task_runner.logging_config import setup_logging
 
 
@@ -22,6 +22,11 @@ def main() -> None:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Log level (default: INFO)",
     )
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Run in watch mode: poll continuously instead of exiting after one batch",
+    )
     args = parser.parse_args()
 
     setup_logging(args.log_level)
@@ -37,8 +42,12 @@ def main() -> None:
         print("Error: No repos configured", file=sys.stderr)
         sys.exit(1)
 
-    daemon = Daemon(config)
-    asyncio.run(daemon.run())
+    runner = Runner(config)
+
+    if args.watch:
+        asyncio.run(runner.run_watch())
+    else:
+        asyncio.run(runner.run_once())
 
 
 if __name__ == "__main__":

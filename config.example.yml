@@ -1,9 +1,6 @@
 # Claude Code Task Runner Configuration
 # Copy to config.yml and modify as needed.
 
-# Polling interval in seconds
-poll_interval: 60
-
 # Directory where repos are cloned
 workspace_dir: /workspace
 
@@ -14,8 +11,8 @@ max_turns: 50
 task_timeout: 1800
 
 # Permission mode for Claude Code execution
-#   acceptEdits - Auto-accept file edits (recommended for unattended use)
-#   default     - Prompt for all dangerous operations (NOT for unattended use)
+#   acceptEdits - Auto-accept file edits (recommended)
+#   default     - Prompt for all dangerous operations
 permission_mode: "acceptEdits"
 
 # Bash commands to auto-approve (written to .claude/settings.json per repo)

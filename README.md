@@ -1,124 +1,79 @@
 # Claude Code Auto Task Runner
 
-GitHub Issues からタスクを自動取得し、Claude Code (Agent SDK) で実行 → PR 作成まで行う 24/365 無人デーモン。
+GitHub Issues からタスクを自動取得し、Claude Code (Agent SDK) で実行 → PR 作成まで行うバッチ型タスクランナー。
 
-Issue 本文がそのまま Claude へのプロンプトになる。人間は Issue を書いてラベルを付けるだけ。
+起動すると未処理タスクを全件取得 → 順次処理 → 全部終わったら自動終了。
+業務後に起動して放置、翌朝 PR を確認する使い方を想定。
 
 ## 全体フロー
 
 ```mermaid
 sequenceDiagram
     participant User as 人間
+    participant CLI as task-runner
     participant GH as GitHub
-    participant D as Daemon
     participant C as Claude Agent SDK
     participant Repo as Git Repository
 
-    User->>GH: Issue 作成 + claude-task ラベル
+    User->>CLI: 起動 (python -m task_runner)
 
-    loop poll_interval 秒ごと
-        D->>GH: open Issue をポーリング (GitHub API)
+    CLI->>GH: claude-task ラベル付き Issue を全件取得
+
+    loop 取得した Issue を順次処理
+        CLI->>GH: claude-in-progress ラベル付与 (claim)
+        CLI->>Repo: clone / fetch + reset
+        CLI->>Repo: .claude/settings.json 書き出し
+        CLI->>Repo: claude/{issue番号} ブランチ作成
+        CLI->>C: Issue 本文をプロンプトとして実行
+        C->>Repo: ファイル読み書き + Bash 実行
+        C-->>CLI: 実行結果
+        CLI->>Repo: git add → commit → push
+        CLI->>GH: PR 作成 (gh CLI)
+        CLI->>GH: Issue にコメント + claude-done ラベル + close
     end
 
-    GH-->>D: claude-task ラベル付き Issue 検出
+    CLI->>CLI: 全タスク完了 → 自動終了
 
-    D->>GH: claude-in-progress ラベル付与 (claim)
-    D->>Repo: clone / fetch + reset
-    D->>Repo: .claude/settings.json 書き出し
-    D->>Repo: claude/{issue番号} ブランチ作成
-
-    D->>C: Issue 本文をプロンプトとして実行
-    C->>Repo: ファイル読み書き + Bash 実行
-    C-->>D: 実行結果
-
-    D->>Repo: git add → commit → push
-    D->>GH: PR 作成 (gh CLI)
-    D->>GH: Issue にコメント投稿
-    D->>GH: claude-done ラベル付与 + Issue close
-
-    GH-->>User: PR レビュー待ち通知
+    User->>GH: 翌朝 PR をレビュー
 ```
 
 ## アーキテクチャ
 
 ```mermaid
 graph TB
-    subgraph Docker Container
-        subgraph Daemon ["daemon.py (メインループ)"]
-            Poll[ポーリング]
-            Cycle[タスクサイクル]
+    subgraph "python -m task_runner"
+        Main["__main__.py<br/>引数解析 + バリデーション"]
+        Main --> Runner["Runner.run_once()"]
+
+        Runner --> Fetch["source.fetch_pending_tasks()<br/>全件取得"]
+        Fetch --> Loop
+
+        subgraph Loop ["タスクごとに順次実行"]
+            Claim["source.claim_task()"]
+            Claim --> Ensure["git.ensure_repo()"]
+            Ensure --> Settings["git.write_claude_settings()"]
+            Settings --> Branch["git.create_branch()"]
+            Branch --> Exec["executor.execute()<br/>Claude Agent SDK"]
+            Exec --> Changes{"変更あり?"}
+            Changes -->|Yes| Push["git.commit_and_push()"]
+            Push --> PRCreate["git.create_pr()"]
+            PRCreate --> Report["source.report_result()"]
+            Changes -->|No| Report
         end
 
-        subgraph Sources ["Task Sources"]
-            GHS[GitHub Issues<br/>github_source.py]
-            BLS[Backlog<br/>後日追加]
-        end
-
-        subgraph Executor ["executor.py"]
-            SDK[Claude Agent SDK<br/>permission_mode: acceptEdits<br/>setting_sources: project]
-        end
-
-        subgraph Git ["git_manager.py"]
-            Clone[clone / fetch]
-            Branch[branch 作成]
-            Commit[commit + push]
-            PR[PR 作成<br/>gh CLI]
-        end
-
-        Config[config.py<br/>YAML + 環境変数]
-        Settings[".claude/settings.json<br/>Bash 許可ルール"]
-        Log[logging_config.py<br/>JSON 構造化ログ]
+        Loop --> Done["全タスク完了 → exit"]
     end
+
+    Signal["SIGTERM / SIGINT"] -.->|残りスキップして終了| Runner
 
     subgraph External
-        GitHub[GitHub API]
-        Anthropic[Anthropic API]
-        Workspace["/workspace<br/>(Volume)"]
+        GitHub["GitHub API"]
+        Anthropic["Anthropic API"]
     end
 
-    Poll -->|poll_interval| GHS
-    GHS -->|httpx| GitHub
-    Cycle --> Executor
-    SDK -->|claude_agent_sdk.query| Anthropic
-    Git -->|git + gh| GitHub
-    Clone --> Workspace
-    Settings -.->|allowedTools| SDK
-    Config -.-> Daemon
-    Config -.-> Executor
-    Config -.-> Git
-```
-
-## 実行構造
-
-```mermaid
-graph LR
-    subgraph "docker compose up"
-        subgraph "python -m task_runner"
-            Main["__main__.py<br/>引数解析 + バリデーション"]
-            Main --> DaemonRun["daemon.run()"]
-
-            subgraph "while running ループ"
-                DaemonRun --> PollCycle
-
-                PollCycle["_poll_cycle()"]
-                PollCycle --> Fetch["source.fetch_pending_tasks()"]
-                Fetch --> Claim["source.claim_task()"]
-                Claim --> EnsureRepo["git.ensure_repo()"]
-                EnsureRepo --> WriteSettings["git.write_claude_settings()"]
-                WriteSettings --> CreateBranch["git.create_branch()"]
-                CreateBranch --> Execute["executor.execute()"]
-                Execute --> HasChanges{"変更あり?"}
-                HasChanges -->|Yes| CommitPush["git.commit_and_push()"]
-                CommitPush --> CreatePR["git.create_pr()"]
-                CreatePR --> Report["source.report_result()"]
-                HasChanges -->|No| Report
-                Report --> Sleep["sleep(poll_interval)"]
-                Sleep --> PollCycle
-            end
-        end
-    end
-
-    Signal["SIGTERM / SIGINT"] -.->|graceful shutdown| DaemonRun
+    Fetch -->|httpx| GitHub
+    Exec -->|claude_agent_sdk| Anthropic
+    Push -->|git + gh| GitHub
 ```
 
 ### 権限制御の仕組み
@@ -163,19 +118,27 @@ gh label create claude-task --repo your-org/your-repo --color 0E8A16
 gh label create claude-in-progress --repo your-org/your-repo --color FBCA04
 gh label create claude-done --repo your-org/your-repo --color 5319E7
 
-# 5. 起動
-docker compose up -d
-
-# ログ確認
-docker compose logs -f
+# 5. 実行 (タスク完了後に自動終了)
+docker compose run --rm task-runner
 ```
 
 ## 使い方
 
+```bash
+# 業務後にタスクを積んでおいて…
+# Issue に claude-task ラベルを付ける
+
+# 帰る前に実行
+docker compose run --rm task-runner
+
+# 翌朝: PR を確認してマージ
+```
+
 1. 監視対象リポジトリに Issue を作成
 2. `claude-task` ラベルを付与
 3. Issue 本文にタスク内容を記述（これが Claude へのプロンプトになる）
-4. デーモンが自動で拾い → 実行 → PR 作成 → Issue close
+4. `docker compose run --rm task-runner` で実行
+5. 全タスク処理後に自動終了 → 翌朝 PR をレビュー
 
 ## セットアップ詳細
 
@@ -210,7 +173,19 @@ graph LR
 | `GIT_USER_NAME` | No | コミットの author name (default: `claude-task-runner`) |
 | `GIT_USER_EMAIL` | No | コミットの author email (default: `claude-task-runner@noreply.github.com`) |
 
-### ローカル実行 (Docker なし)
+## 実行方法
+
+### Docker (推奨)
+
+```bash
+# バッチ実行 (タスク全部やって終了)
+docker compose run --rm task-runner
+
+# ログを見ながら実行
+docker compose run --rm task-runner -c /app/config.yml --log-level DEBUG
+```
+
+### ローカル (Docker なし)
 
 ```bash
 python3 -m venv .venv
@@ -223,13 +198,24 @@ export ANTHROPIC_API_KEY=sk-ant-xxx
 python -m task_runner -c config.yml
 ```
 
+### Watch モード (従来のデーモン動作)
+
+継続的にポーリングしたい場合は `--watch` フラグ:
+
+```bash
+# Docker
+docker compose run --rm task-runner --watch
+
+# ローカル
+python -m task_runner -c config.yml --watch
+```
+
 ## 設定リファレンス
 
 ### config.yml
 
 | キー | デフォルト | 説明 |
 |------|-----------|------|
-| `poll_interval` | `60` | ポーリング間隔（秒） |
 | `workspace_dir` | `/workspace` | リポジトリの clone 先 |
 | `max_turns` | `50` | Claude の最大ターン数 / タスク |
 | `task_timeout` | `1800` | タスクのタイムアウト（秒、デフォルト 30 分） |
@@ -290,7 +276,7 @@ allowed_bash_commands:
 ├── TODO.md                  # 残件・改善タスク
 └── src/task_runner/
     ├── __main__.py          # CLI エントリポイント
-    ├── daemon.py            # メインループ + シグナルハンドリング
+    ├── daemon.py            # Runner (バッチ実行 / watch モード)
     ├── config.py            # YAML + 環境変数から設定読み込み
     ├── models.py            # Task, TaskResult データクラス
     ├── sources/
@@ -315,8 +301,7 @@ class TaskSource(Protocol):
 ## 既知の制限事項
 
 - デフォルトブランチが `main` 固定（`master` 等には未対応）
-- 1 サイクル 1 タスクの順次処理（並行処理は未実装）
-- daemon 異常終了時に `claude-in-progress` ラベルが残る可能性あり
 - Issue 本文のプロンプトインジェクション対策なし
+- 同一 Issue のブランチが既存の場合にエラーになる可能性
 
 詳細は [TODO.md](./TODO.md) を参照。

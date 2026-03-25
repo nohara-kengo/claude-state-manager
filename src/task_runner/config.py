@@ -6,6 +6,31 @@ from pathlib import Path
 
 import yaml
 
+DEFAULT_BASH_COMMANDS = [
+    "git status *",
+    "git diff *",
+    "git log *",
+    "git show *",
+    "git branch *",
+    "git checkout *",
+    "git add *",
+    "git commit *",
+    "git push *",
+    "git fetch *",
+    "git stash *",
+    "git rm *",
+    "git mv *",
+    "git tag *",
+    "npm *",
+    "python *",
+    "pytest *",
+    "make *",
+    "ls *",
+    "cat *",
+    "find *",
+    "grep *",
+]
+
 
 @dataclass
 class GitHubConfig:
@@ -18,35 +43,11 @@ class GitHubConfig:
 
 @dataclass
 class Config:
-    poll_interval: int = 60
     workspace_dir: str = "/workspace"
     max_turns: int = 50
     task_timeout: int = 1800  # 30 minutes
     permission_mode: str = "acceptEdits"
-    allowed_bash_commands: list[str] = field(default_factory=lambda: [
-        "git status *",
-        "git diff *",
-        "git log *",
-        "git show *",
-        "git branch *",
-        "git checkout *",
-        "git add *",
-        "git commit *",
-        "git push *",
-        "git fetch *",
-        "git stash *",
-        "git rm *",
-        "git mv *",
-        "git tag *",
-        "npm *",
-        "python *",
-        "pytest *",
-        "make *",
-        "ls *",
-        "cat *",
-        "find *",
-        "grep *",
-    ])
+    allowed_bash_commands: list[str] = field(default_factory=lambda: list(DEFAULT_BASH_COMMANDS))
     github: GitHubConfig = field(default_factory=GitHubConfig)
     anthropic_api_key: str = ""
 
@@ -67,12 +68,11 @@ def load_config(config_path: str | None = None) -> Config:
     )
 
     return Config(
-        poll_interval=data.get("poll_interval", 60),
         workspace_dir=data.get("workspace_dir", "/workspace"),
         max_turns=data.get("max_turns", 50),
         task_timeout=data.get("task_timeout", 1800),
         permission_mode=data.get("permission_mode", "acceptEdits"),
-        allowed_bash_commands=data.get("allowed_bash_commands", Config().allowed_bash_commands),
+        allowed_bash_commands=data.get("allowed_bash_commands", list(DEFAULT_BASH_COMMANDS)),
         github=gh,
         anthropic_api_key=os.environ.get(
             "ANTHROPIC_API_KEY", data.get("anthropic_api_key", "")
