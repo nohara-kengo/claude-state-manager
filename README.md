@@ -106,7 +106,9 @@ claude --yes --max-budget-usd 5 -p "/run-tasks nohara-kengo/claude-state-manager
 | `--max-budget-usd` | 予算超過で自動停止。再実行で処理済み課題はスキップ |
 | Draft PR + Closes #N | マージ時に Issue 自動クローズ。手動操作なし |
 | ロックファイル | cron 重複実行を防止 |
-| 実行ログ → Backlog Wiki | 実行結果を自動記録。失敗原因の追跡が容易 |
+| 実行ログ → Backlog Wiki | 実行結果を自動記録。処理時間・エラーコード付きで失敗原因の追跡が容易。リポジトリ名入りタイトルで複数リポジトリ対応 |
+| ログレベル（INFO/WARN/ERROR） | 段階的出力制御。正常系・警告・エラーを分類し、ノイズを低減 |
+| エラー分類 | MCP失敗・タイムアウト・コンテキスト不足を明示。原因特定を迅速化 |
 
 ## コスト確認
 
