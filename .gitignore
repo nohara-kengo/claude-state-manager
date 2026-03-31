@@ -1,3 +1,7 @@
+# 個人設定（トークン含む）
+.claude/settings.local.json
+
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -5,20 +9,16 @@ __pycache__/
 dist/
 build/
 *.egg
-
 .venv/
 venv/
 env/
 
+# 環境変数
 .env
 .env.local
 
-config.yml
-
+# ログ
 *.log
 
-/workspace/
-
-.claude/
-
+# Node
 node_modules/

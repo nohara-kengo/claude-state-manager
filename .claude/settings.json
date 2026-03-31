@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "mcp__github",
+      "mcp__backlog"
+    ]
+  }
+}
