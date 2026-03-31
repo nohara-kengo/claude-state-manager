@@ -1,143 +1,116 @@
 # Claude State Manager
 
-Claude Code のスラッシュコマンド + MCP で、GitHub Issue → コード修正 → PR 作成 → Backlog 連携を自動化するプラグイン。
+Backlog 課題 → コード調査 → GitHub Issue → Draft PR を自動化する Claude Code プラグイン。
 
-業務後に `/run-tasks` を実行して放置、翌朝 PR を確認する運用を想定。
+## 前提条件
 
-## 全体フロー
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) インストール済み
+- Node.js 18+ / npx
+- Git
+
+## フロー
 
 ```mermaid
 sequenceDiagram
     participant User as 人間
-    participant Claude as Claude Code
+    participant Main as メイン
+    participant Plan as Plan サブ（sonnet）
     participant GHMCP as GitHub MCP
+    participant Impl as 実装サブ（worktree）
     participant BLMCP as Backlog MCP
-    participant Repo as Git Repository
 
-    User->>Claude: /run-tasks owner/repo
+    User->>Main: /run-tasks owner/repo
+    Main->>BLMCP: 自分の担当「処理中」課題を取得
 
-    Claude->>GHMCP: claude-task ラベル付き Issue を取得
+    par Phase 1: 調査
+        Main->>Plan: コードベース調査
+        Plan-->>Main: 修正方針
+    end
+    Main->>GHMCP: GitHub Issue 作成
 
-    loop 各 Issue を順次処理
-        Claude->>Claude: Issue 内容を分析
-        Claude->>Repo: git checkout -b fix/issue-{番号}
-        Claude->>Repo: コード修正
-        Claude->>Repo: git commit & push
-        Claude->>GHMCP: PR 作成 (Closes #{番号})
-        Claude->>BLMCP: 対応する Backlog 課題のステータス更新
+    par Phase 2: 実装
+        Main->>Impl: Issue に基づき実装
+        Impl->>GHMCP: Draft PR（Closes #N）
+        Impl->>BLMCP: 「AI処理済み」に更新
+        Impl-->>Main: 結果
     end
 
-    Claude->>User: 処理結果サマリーを表示
-    User->>GHMCP: 翌朝 PR をレビュー
-```
-
-## アーキテクチャ
-
-```mermaid
-graph TB
-    subgraph "Claude Code"
-        CMD["/run-tasks コマンド<br/>.claude/commands/run-tasks.md"]
-        CMD --> Claude["Claude Code エージェント"]
-    end
-
-    subgraph "MCP Servers"
-        GHMCP["GitHub MCP Server<br/>@modelcontextprotocol/server-github"]
-        BLMCP["Backlog MCP Server<br/>（自作 or 既存）"]
-    end
-
-    subgraph "外部サービス"
-        GH["GitHub<br/>Issue / PR / Labels"]
-        BL["Backlog<br/>課題 / ステータス"]
-    end
-
-    Claude -->|Issue取得・PR作成| GHMCP
-    Claude -->|課題ステータス更新| BLMCP
-    Claude -->|git操作| Git["Git Repository"]
-    GHMCP --> GH
-    BLMCP --> BL
-```
-
-## 権限制御
-
-```mermaid
-graph TD
-    subgraph "settings.json（共有・git管理）"
-        Perm["permissions.allow:<br/>Bash(git *)<br/>mcp__github<br/>mcp__backlog"]
-    end
-
-    subgraph "settings.local.json（個人・git管理外）"
-        GHToken["GitHub MCP<br/>GITHUB_PERSONAL_ACCESS_TOKEN"]
-        BLToken["Backlog MCP<br/>BACKLOG_SPACE_URL / API_KEY"]
-    end
-
-    Perm --> Claude["Claude Code 実行"]
-    GHToken --> GHMCP["GitHub MCP Server"]
-    BLToken --> BLMCP["Backlog MCP Server"]
-    GHMCP --> Claude
-    BLMCP --> Claude
-```
-
-## ファイル構成
-
-```
-claude-state-manager/
-├── README.md
-├── .gitignore
-└── .claude/
-    ├── settings.json          # 共有設定（permissions）
-    ├── settings.local.json    # 個人設定（MCP・トークン）※git管理外
-    └── commands/
-        └── run-tasks.md       # /run-tasks スラッシュコマンド
+    Main->>BLMCP: 実行ログを Wiki に投稿
+    Main->>User: サマリー表示
 ```
 
 ## セットアップ
 
-### 1. クローン
-
 ```bash
 git clone https://github.com/nohara-kengo/claude-state-manager.git
 cd claude-state-manager
-```
 
-### 2. 個人設定
+# MCP サーバー登録
+claude mcp add backlog \
+  -e BACKLOG_DOMAIN=<your-space>.backlog.com \
+  -e BACKLOG_API_KEY=<your-key> \
+  -- npx -y backlog-mcp-server
 
-`settings.local.json` にトークンを記入:
-
-```bash
-vi .claude/settings.local.json
-```
-
-| 環境変数 | 説明 |
-|---------|------|
-| `GITHUB_PERSONAL_ACCESS_TOKEN` | GitHub Personal Access Token（repo スコープ） |
-| `BACKLOG_SPACE_URL` | Backlog スペース URL（例: `https://xxx.backlog.com`） |
-| `BACKLOG_API_KEY` | Backlog API キー |
-
-### 3. ラベル作成
-
-対象リポジトリに `claude-task` ラベルを作成:
-
-```bash
-gh label create claude-task --repo owner/repo --color 0E8A16
-```
-
-### 4. タスクを積む
-
-対象リポジトリで Issue を作成し、`claude-task` ラベルを付与。
-Issue 本文がそのまま Claude へのプロンプトになる。
-
-### 5. 実行
-
-```bash
-cd 対象リポジトリ
-/run-tasks owner/repo
+claude mcp add github \
+  -e GITHUB_PERSONAL_ACCESS_TOKEN=<your-pat> \
+  -- npx -y @modelcontextprotocol/server-github
 ```
 
 ## 使い方
 
 ```bash
-# 1. Issue に claude-task ラベルを付けてタスクを積む
-# 2. 帰る前に実行
-/run-tasks owner/repo
-# 3. 翌朝 PR を確認してマージ
+# 1. Backlog に課題を作成し、担当者を自分にする
+# 2. 実行
+claude --yes --max-budget-usd 5 -p "/run-tasks nohara-kengo/claude-state-manager"
+# 3. Draft PR をレビュー → マージ
 ```
+
+`/run-tasks` の引数は GitHub リポジトリ（`owner/repo`）。PR 作成先として使用。
+自分の担当課題のみ処理。他人の課題には触れません。
+
+## 権限設定
+
+`settings.json` で `Bash(*)` を全許可しています。`--yes` 実行時にコマンド確認で止まらないようにするためです。
+
+安全性は以下で担保:
+- 実装は worktree 内で実行 → 本体に影響しない
+- git 管理下なので誤削除しても復元可能
+- 最終的に人間が Draft PR をレビューしてからマージ
+
+## 実行オプション
+
+| フラグ | 説明 |
+|--------|------|
+| `--yes` | 許可プロンプトを自動承認 |
+| `-p` | ヘッドレス実行 |
+| `--max-budget-usd N` | 予算上限（USD）。超過で停止、再実行で続行可 |
+| `--max-turns N` | ターン数上限 |
+
+```bash
+# cron 例: 毎日 22:00 に自動実行
+0 22 * * * cd /path/to/repo && claude --yes --max-budget-usd 10 -p "/run-tasks owner/repo"
+```
+
+## コスト・リソースの工夫
+
+| 工夫 | 効果 |
+|------|------|
+| 調査と実装を2フェーズに分離 | 方針ミス時はPhase 1のコストだけで済む |
+| 優先度×種別でモデル使い分け | 高優先=opus / 中=sonnet / 低=haiku（CLAUDE.md参照） |
+| Phase 1 は全件 sonnet（読取専用） | コード生成しないので安いモデルで十分 |
+| サブエージェント委譲 | 課題ごとに独立コンテキスト → 完了後に解放 |
+| 最大3件バッチ実行 | API レート制限・MCP同時接続の制御 |
+| 担当者フィルタ（get_myself） | 自分の課題だけ処理。無駄な課題を読まない |
+| MCP 呼び出し最小化 | GitHub MCP=Issue/PR作成のみ、Backlog get_issue=サブから呼ばない |
+| Glob/Grep 優先 | ローカル操作=トークン消費なし |
+| `--max-budget-usd` | 予算超過で自動停止。再実行で処理済み課題はスキップ |
+| Draft PR + Closes #N | マージ時に Issue 自動クローズ。手動操作なし |
+| ロックファイル | cron 重複実行を防止 |
+| 実行ログ → Backlog Wiki | 実行結果を自動記録。失敗原因の追跡が容易 |
+
+## コスト確認
+
+| 方法 | 用途 |
+|------|------|
+| `/cost` | セッションのトークン消費・コスト表示 |
+| `CLAUDE_CODE_ENABLE_TELEMETRY=1` | OpenTelemetry でメトリクス収集 |
