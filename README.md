@@ -1,4 +1,4 @@
-# Claude State Manager
+# Claude Run Tasks
 
 Backlog 課題 → コード調査 → GitHub Issue → Draft PR を自動化する Claude Code プラグイン。
 
